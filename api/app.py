@@ -12,11 +12,8 @@ YAML_PATH = os.path.join(BASE_DIR, "pack", "betty_spectra.yaml")
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
 
-# Together est désactivé par défaut pour maîtriser les coûts.
-# Pour l'activer volontairement dans Vercel : DEMO_LLM_ENABLED=1.
-DEMO_LLM_ENABLED = os.environ.get("DEMO_LLM_ENABLED", "0").strip().lower() in (
-    "1", "true", "yes", "on"
-)
+# Together est appelé en premier dès qu'une clé est configurée.
+# Sans clé, ou si l'appel échoue, le script déterministe prend le relais.
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY", "").strip()
 TOGETHER_API_URL = "https://api.together.xyz/v1/chat/completions"
 LLM_MODEL = os.environ.get(
@@ -196,7 +193,7 @@ def fallback_reply(state):
 
 
 def call_together(history, message):
-    if not DEMO_LLM_ENABLED or not TOGETHER_API_KEY:
+    if not TOGETHER_API_KEY:
         return None
 
     messages = [{"role": "system", "content": load_prompt()}]
