@@ -58,6 +58,12 @@
     .user { text-align: right; color: #ffffff; }
     .bot  { text-align: left;  color: #a78bfa; }
 
+    .msg a {
+      color: #facc15;
+      font-weight: 800;
+      text-decoration: underline;
+    }
+
     .footer {
       display: flex;
       gap: 5px;
@@ -106,7 +112,7 @@
     </div>
 
     <div id="messages" class="messages">
-      <div class="msg bot">Bonjour 🙂 Dites-moi ce que vous cherchez.</div>
+      <div class="msg bot">Bonjour 🙂 Pour rendre cette démonstration utile, quel est votre métier ou votre activité ?</div>
     </div>
 
     <div class="footer">
@@ -118,6 +124,33 @@
   </div>
 
   <script>
+    const opening = "Bonjour 🙂 Pour rendre cette démonstration utile, quel est votre métier ou votre activité ?";
+    const history = [{ role: "assistant", content: opening }];
+    const OFFLINE_PROMPTS = [
+      "Quel est votre métier ou votre activité ?",
+      "Qu'aimeriez-vous que Betty qualifie ou récupère sur votre site : demandes de devis, rendez-vous, inscriptions, ventes ou autre chose ?",
+      "Quel critère serait le plus utile pour qualifier ces demandes : la ville, la prestation, le budget, le délai ou l'urgence ?",
+      "Parfait — j'ai maintenant assez de contexte pour montrer la valeur de Betty. Quel est votre prénom ?",
+      "Merci. Quelle est votre préférence pour recevoir les informations d'activation : email ou mobile ?",
+      "Voici le résumé qualifié que le professionnel recevrait : activité, besoin, critère utile et contact. C'est exactement ce que Betty peut produire sur votre site."
+    ];
+    let offlineStep = 0;
+
+    function escapeHtml(text) {
+      return String(text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    function formatMessage(text) {
+      const escaped = escapeHtml(text);
+      return escaped.replace(/(https?:\/\/[^\s<]+)/g, url => {
+        const clean = url.replace(/[>.,)&]+$/, "");
+        return `<a href="${clean}" target="_blank" rel="noopener">${clean}</a>`;
+      });
+    }
+
     async function send() {
       const input    = document.getElementById("input");
       const messages = document.getElementById("messages");
@@ -126,7 +159,7 @@
       const text = input.value.trim();
       if (!text) return;
 
-      messages.innerHTML += `<div class="msg user">${text}</div>`;
+      messages.innerHTML += `<div class="msg user">${escapeHtml(text)}</div>`;
       input.value = "";
       status.textContent = "Betty réfléchit…";
       messages.scrollTop = messages.scrollHeight;
@@ -135,7 +168,7 @@
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text })
+          body: JSON.stringify({ message: text, history })
         });
 
         const raw = await res.text();
@@ -145,13 +178,21 @@
 
         if (!res.ok) throw new Error(data.response || "Erreur serveur");
 
-        messages.innerHTML += `<div class="msg bot">${data.response}</div>`;
+        const reply = String(data.response || "").trim();
+        if (!reply) throw new Error("empty");
+        history.push({ role: "user", content: text });
+        history.push({ role: "assistant", content: reply });
+        messages.innerHTML += `<div class="msg bot">${formatMessage(reply)}</div>`;
         status.textContent = "";
+        offlineStep = 0;
 
       } catch (e) {
-        console.error("Erreur chat :", e);
-        messages.innerHTML += `<div class="msg bot">Petit souci technique…</div>`;
-        status.textContent = String(e.message || e);
+        const reply = OFFLINE_PROMPTS[Math.min(offlineStep, OFFLINE_PROMPTS.length - 1)];
+        offlineStep++;
+        history.push({ role: "user", content: text });
+        history.push({ role: "assistant", content: reply });
+        messages.innerHTML += `<div class="msg bot">${formatMessage(reply)}</div>`;
+        status.textContent = "";
       }
 
       messages.scrollTop = messages.scrollHeight;
