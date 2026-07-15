@@ -36,12 +36,84 @@ GREETINGS = {
 }
 
 
-def load_prompt():
+def load_config():
     try:
         with open(YAML_PATH, "r", encoding="utf-8") as f:
-            return (yaml.safe_load(f) or {}).get("prompt", "").strip() or DEFAULT_PROMPT
+            return yaml.safe_load(f) or {}
     except Exception:
-        return DEFAULT_PROMPT
+        return {}
+
+
+def load_knowledge_base():
+    return load_config().get("knowledge_base", {}) or {}
+
+
+def load_prompt():
+    config = load_config()
+    base = str(config.get("prompt") or "").strip() or DEFAULT_PROMPT
+    facts = [
+        f"- {entry.get('id', 'fait')} : {entry.get('answer')}"
+        for entry in load_knowledge_base().get("entries", [])
+        if entry.get("answer")
+    ]
+    if not facts:
+        return base
+    return (
+        base
+        + "\n\nBASE DE CONNAISSANCES VÉRIFIÉE — source de vérité, "
+          "ne jamais la contredire ni l'étendre :\n"
+        + "\n".join(facts)
+    )
+
+
+def find_kb_answer(message):
+    text = norm(message)
+    if not text:
+        return ""
+    base = load_knowledge_base()
+    best = None
+    best_score = -1
+    for entry in base.get("entries", []):
+        matched = [
+            trigger for trigger in entry.get("triggers", [])
+            if norm(trigger) and norm(trigger) in text
+        ]
+        if not matched:
+            continue
+        score = int(entry.get("priority", 0)) * 1000 + max(len(norm(t)) for t in matched)
+        if score > best_score:
+            best = entry
+            best_score = score
+    if best:
+        return str(best.get("answer") or "").strip()
+
+    question_starts = (
+        "combien ", "comment ", "est-ce ", "peut-on ", "pouvez-vous ",
+        "quel ", "quelle ", "qu'est-ce ", "c'est quoi ", "je veux savoir "
+    )
+    product_terms = ("betty", "mybetty", "chatbot", "assistante", "abonnement", "service")
+    if (
+        any(term in text for term in product_terms)
+        and ("?" in str(message) or text.startswith(question_starts))
+    ):
+        return str(base.get("unknown_answer") or "").strip()
+    return ""
+
+
+def find_qualification_profile(activity):
+    text = norm(activity)
+    if not text:
+        return {}
+    for profile in load_config().get("qualification_profiles", []):
+        if any(norm(trigger) in text for trigger in profile.get("triggers", [])):
+            return profile
+    return {}
+
+
+def combine_knowledge_and_flow(answer, flow_reply):
+    answer = str(answer or "").strip()
+    flow_reply = str(flow_reply or "").strip()
+    return f"{answer}\n\n{flow_reply}" if answer else flow_reply
 
 
 def norm(value):
@@ -141,7 +213,8 @@ def rebuild_state(history, message):
         if not state["name"]:
             state["name"] = find_name(content)
 
-        if last_ask and not is_greeting(content):
+        knowledge_turn = bool(find_kb_answer(content))
+        if last_ask and not is_greeting(content) and not knowledge_turn:
             value = str(content or "").strip()
             if last_ask == "activity" and not state["activity"]:
                 state["activity"] = value[:100]
@@ -165,11 +238,18 @@ def fallback_reply(state):
             "demandes de devis, rendez-vous, inscriptions, ventes ou autre chose ?"
         )
     if not state["qualifier"]:
+        profile = find_qualification_profile(state["activity"])
+        if profile.get("question"):
+            return profile["question"]
         return (
             "Quel critère serait le plus utile pour qualifier ces demandes : "
             "la ville, la prestation, le budget, le délai ou l’urgence ?"
         )
     if not state["name"]:
+        profile = find_qualification_profile(state["activity"])
+        value = str(profile.get("value") or "").strip()
+        if value:
+            return f"{value} Quel est votre prénom ?"
         return (
             "Parfait — j’ai maintenant assez de contexte pour montrer la valeur de Betty. "
             "Quel est votre prénom ?"
@@ -301,9 +381,14 @@ def chat():
                 "lead_captured": False,
             })
 
+        knowledge_answer = find_kb_answer(message)
+        qualification_message = "" if knowledge_answer else message
+
         before = rebuild_state(history, "")
-        state = rebuild_state(history, message)
-        reply = call_together(history, message) or fallback_reply(state)
+        state = rebuild_state(history, qualification_message)
+        llm_reply = call_together(history, message)
+        flow_reply = fallback_reply(state)
+        reply = llm_reply or combine_knowledge_and_flow(knowledge_answer, flow_reply)
 
         had_contact = bool(before["email"] or before["phone"])
         has_contact = bool(state["email"] or state["phone"])
